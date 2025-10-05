@@ -13,24 +13,45 @@ let offset = 0; // Para llevar la cuenta de los mensajes ya procesados
 // Función principal que inicia el ciclo de polling
 const startBot = async () => {
     console.log('🤖 Bot escuchando actualizaciones de Telegram...');
-    setInterval(pollUpdates, 3000); // Revisa si hay nuevos mensajes cada 3 segundos
+    // Llamamos a la función de polling por primera vez para iniciar el ciclo.
+    pollUpdates(); 
 };
 
 // Función que consulta a la API de Telegram por nuevos mensajes
 const pollUpdates = async () => {
     try {
         const { data } = await axios.get(`${TELEGRAM_API}/getUpdates`, {
-            params: { offset: offset + 1, timeout: 2 } // timeout largo para long-polling
+            // timeout de 30 segundos, es un valor estándar para long polling.
+            // La petición se mantendrá abierta hasta 30s si no hay mensajes.
+            params: { offset: offset + 1, timeout: 30 } 
         });
 
         if (data.result.length > 0) {
             for (const update of data.result) {
                 offset = update.update_id; // Actualizamos el offset
-                await processUpdate(update); // Procesamos cada mensaje
+                // Procesamos cada mensaje de forma asíncrona pero sin esperar (no bloqueante)
+                // para que el polling continúe rápidamente si llegan varios mensajes a la vez.
+                processUpdate(update); 
             }
         }
     } catch (error) {
-        console.error('Error en el polling de Telegram:', error.message);
+        if (error.response && error.response.status === 409) {
+            // Este error ya no debería ocurrir, pero lo dejamos como seguridad.
+            console.warn('Conflicto de polling detectado (409). Reiniciando ciclo.');
+        } else if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') {
+            // Errores de red comunes en long polling, son normales.
+            console.log('Timeout de polling o reseteo de conexión, reiniciando ciclo.');
+        } else {
+            // Errores inesperados
+            console.error('Error grave en el polling de Telegram:', error.message);
+            // Esperamos un poco antes de reintentar en caso de un error grave
+            await new Promise(resolve => setTimeout(resolve, 5000)); 
+        }
+    } finally {
+        // MUY IMPORTANTE:
+        // Ya sea que la petición tuvo éxito o falló, llamamos a pollUpdates de nuevo
+        // para crear un bucle infinito y robusto.
+        pollUpdates();
     }
 };
 
@@ -84,20 +105,20 @@ const processQuoteRequest = async (chatId, text) => {
 
 **Máquina:** ${machine.nombre_modelo}
 **Descripción:** ${machine.descripcion}
-**Duración Solicitada:** ${analisis_interno.duracion}
+**Duración Solicitada:** ${analisis_interno.duracion_texto}
 ---
 **Subtotal:** $${subtotal.toFixed(2)} MXN
 **IVA (16%):** $${iva.toFixed(2)} MXN
 **Total:** **$${total.toFixed(2)} MXN**
 
-*Este es un costo preliminar. En los siguientes pasos generaré el PDF y agendaré un recordatorio.*`;
+*A continuación, generaré el PDF y agendaré la renta en nuestro calendario para las fechas solicitadas.*`;
 
             await telegramService.sendMessage(chatId, quoteText, 'Markdown');
 
             // Preparar el objeto de datos para los servicios de PDF y Calendario
             const quoteData = {
                 machine: machine,
-                duration: analisis_interno.duracion,
+                duration: analisis_interno.duracion_texto,
                 subtotal: subtotal,
                 iva: iva,
                 total: total,
@@ -114,15 +135,20 @@ const processQuoteRequest = async (chatId, text) => {
             }
 
             // Crear el evento en Google Calendar
-            await telegramService.sendMessage(chatId, '🗓️ Agendando un recordatorio para nuestro equipo de ventas...');
-            const eventCreated = await calendarService.createFollowUpEvent(quoteData, chatId);
+            await telegramService.sendMessage(chatId, '🗓️ Agendando el período de renta en nuestro calendario...');
+            // Pasamos las fechas que nos dio la IA
+            const eventCreated = await calendarService.createRentalEvent(
+                quoteData, 
+                chatId, 
+                analisis_interno.fecha_inicio, 
+                analisis_interno.fecha_fin
+            );
 
             if (eventCreated) {
-                await telegramService.sendMessage(chatId, '✅ ¡Listo! Tu cotización ha sido enviada en PDF y nuestro equipo ha sido notificado para darte el mejor seguimiento. ¡Gracias por tu interés!');
+                await telegramService.sendMessage(chatId, '✅ ¡Listo! Tu período de renta ha sido agendado tentativamente. ¡Gracias por tu interés!');
             } else {
-                await telegramService.sendMessage(chatId, '✅ Tu cotización ha sido enviada. Tuvimos un problema al agendar el recordatorio, pero un asesor se pondrá en contacto a la brevedad.');
+                await telegramService.sendMessage(chatId, '✅ Tu cotización ha sido enviada. Tuvimos un problema al agendar las fechas en el calendario, pero un asesor se pondrá en contacto a la brevedad.');
             }
-
         }
 
     } catch (error) {

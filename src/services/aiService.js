@@ -1,6 +1,6 @@
 const axios = require('axios');
 const ffmpeg = require('fluent-ffmpeg');
-const { PassThrough } = require('stream');
+const { Writable } = require('stream');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 // Configuración de APIS
@@ -12,29 +12,32 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY); // <-- NUEVO CLIENTE
 
 /**
- * Convierte un stream de audio de entrada al formato WAV (PCM 16-bit, 16kHz, Mono),
- * que es ideal para la mayoría de las APIs de reconocimiento de voz.
- * @param {Stream} inputStream El stream de audio original (ej. de un archivo OGG).
- * @returns {Promise<Stream>} Una promesa que se resuelve con un nuevo stream de audio en formato WAV.
+ * Convierte un stream de audio a un Buffer en formato WAV.
+ * @param {Stream} inputStream El stream de audio original.
+ * @returns {Promise<Buffer>} Una promesa que se resuelve con un Buffer de audio WAV.
  */
-const convertToWavStream = (inputStream) => {
-    const outputStream = new PassThrough();
-    
+const convertToWavBuffer = (inputStream) => {
+    const chunks = [];
     return new Promise((resolve, reject) => {
+        // Creamos un stream de escritura en memoria
+        const writableStream = new Writable({
+            write(chunk, encoding, callback) {
+                chunks.push(chunk);
+                callback();
+            }
+        });
+
         ffmpeg(inputStream)
             .toFormat('wav')
-            .audioCodec('pcm_s16le') // Formato estándar PCM 16-bit Little-Endian
-            .audioChannels(1)       // Canal único (Mono)
-            .audioFrequency(16000)  // Frecuencia de muestreo de 16kHz
-            .on('error', (err) => {
-                console.error('Error durante la conversión con ffmpeg:', err.message);
-                reject(err);
-            })
-            .pipe(outputStream);
-
-        // Resolvemos la promesa inmediatamente con el stream de salida.
-        // ffmpeg comenzará a escribir en él tan pronto como reciba datos.
-        resolve(outputStream);
+            .audioCodec('pcm_s16le')
+            .audioChannels(1)
+            .audioFrequency(16000)
+            .on('error', (err) => reject(err))
+            .pipe(writableStream)
+            .on('finish', () => {
+                // Una vez que ffmpeg termina, unimos todos los trozos en un solo Buffer
+                resolve(Buffer.concat(chunks));
+            });
     });
 };
 
@@ -46,30 +49,31 @@ const convertToWavStream = (inputStream) => {
  */
 const transcribeAudio = async (audioUrl) => {
     try {
-        // 1. Descargar el audio de Telegram como un stream de entrada
+        // Descargar el audio de Telegram como un stream de entrada
         const audioInputResponse = await axios({
             method: 'get',
             url: audioUrl,
             responseType: 'stream'
         });
 
-        // 2. Convertir el stream de OGG a WAV en memoria
-        console.log('Convirtiendo audio a formato WAV...');
-        const wavStream = await convertToWavStream(audioInputResponse.data);
+        // Convertir el stream de OGG a WAV en memoria
+        console.log('Convirtiendo audio a formato WAV (Buffer)...');
+        const wavBuffer = await convertToWavBuffer(audioInputResponse.data);
 
-        // 3. Enviar el stream WAV convertido a Wit.ai
-        console.log('Enviando audio WAV a Wit.ai...');
+        // Enviar el Buffer WAV a Wit.ai
+        console.log(`Enviando Buffer de audio (${wavBuffer.length} bytes) a Wit.ai...`);
         const witResponse = await axios({
             method: 'post',
             url: WIT_API_URL,
-            data: wavStream,
+            data: wavBuffer, // Enviamos el Buffer completo
             headers: {
                 'Authorization': `Bearer ${WIT_SERVER_TOKEN}`,
-                'Content-Type': 'audio/wav', // ¡IMPORTANTE! El Content-Type ahora es audio/wav
+                'Content-Type': 'audio/wav',
+                'Content-Length': wavBuffer.length // Axios suele añadir esto, pero ser explícitos ayuda
             }
         });
 
-        // 4. Parseo robusto de la respuesta de Wit.ai
+        // Parseo robusto de la respuesta de Wit.ai
         const responseText = witResponse.data;
         if (typeof responseText !== 'string' || responseText.length === 0) {
             throw new Error('La respuesta de Wit.ai está vacía o no es un texto.');
@@ -110,36 +114,41 @@ const transcribeAudio = async (audioUrl) => {
  */
 const getAssistantResponse = async (history, catalog) => {
     const catalogString = catalog.map(m => `- ${m.nombre_modelo}`).join('\n');
+    const today = new Date().toISOString().slice(0, 10); // Obtenemos la fecha de hoy como YYYY-MM-DD
 
     const prompt = `
-        Eres "Maquinaria Pro", un asistente de ventas virtual experto en alquiler de maquinaria. Eres amigable, profesional y vas directo al grano.
+        Eres "Maquinaria Pro", un asistente de ventas virtual experto en alquiler de maquinaria. Tu personalidad es amigable, profesional y muy eficiente.
+        La fecha de hoy es ${today}. Todas las fechas relativas deben calcularse a partir de hoy.
 
-        **Reglas Fundamentales de Conversación:**
-        1.  **Mantén el Contexto:** Tu respuesta DEBE basarse en el historial completo de la conversación. No te presentes de nuevo si ya lo hiciste. Responde directamente a la última pregunta del usuario.
-        2.  **Sé Proactivo:** Si un usuario pide un listado o pregunta qué tienes, proporciónale la lista completa del catálogo que conoces.
-        3.  **Tu ÚNICO Conocimiento:** Tu inventario se limita a esta lista. No inventes maquinaria.
-            --- CATÁLOGO ---
-            ${catalogString}
-            --- FIN DEL CATÁLOGO ---
+        **Tu Conocimiento del Inventario:**
+        --- CATÁLOGO ---
+        ${catalogString}
+        --- FIN DEL CATÁLOGO ---
 
         **Tu Tarea:**
-        Analiza el historial de la conversación y genera la siguiente respuesta. Tu salida debe ser SIEMPRE un único objeto JSON válido.
-        El JSON debe tener dos claves: "analisis_interno" y "respuesta_usuario".
+        Analiza el historial de la conversación y devuelve SIEMPRE un único objeto JSON válido.
+        El JSON debe tener "analisis_interno" y "respuesta_usuario".
 
-        1.  **analisis_interno**:
-            -   "accion": Decide qué hacer. Valores: "COTIZAR", "ACLARAR", "CATALOGO_INCOMPLETO", "CONVERSACION_GENERAL".
-            -   "maquina": Si aplica, el nombre exacto de la máquina del catálogo. Si no, null.
-            -   "duracion": Si aplica, la duración del alquiler. Si no, null.
+        1.  **analisis_interno**: Contiene tu análisis para que el sistema actúe.
+            -   "accion": Valores: "COTIZAR", "ACLARAR", "CATALOGO_INCOMPLETO", "CONVERSACION_GENERAL".
+            -   "maquina": El nombre exacto de la máquina del catálogo, o null.
+            -   "duracion_texto": El texto original de la duración (ej. "dos semanas"), o null.
+            -   "fecha_inicio": **La fecha de inicio calculada en formato YYYY-MM-DD**, o null.
+            -   "fecha_fin": **La fecha de fin calculada en formato YYYY-MM-DD**, o null.
 
-        2.  **respuesta_usuario**: El texto EXACTO y natural que el bot enviará al usuario. No debe incluir tu nombre ("Maquinaria Pro") a menos que sea la primera vez que hablas.
+        2.  **respuesta_usuario**: El texto EXACTO y amigable que el bot enviará al usuario.
 
-        Reglas para decidir la "accion" y generar la "respuesta_usuario":
-        -   Si identificas claramente una máquina del catálogo **Y TAMBIÉN** una duración de alquiler, la "accion" es "COTIZAR". Si solo tienes uno de los dos, la acción DEBE ser "ACLARAR". La "respuesta_usuario" (para COTIZAR) debe ser un mensaje confirmando que tienes toda la información. Ej: "¡Excelente! Permíteme preparar la cotización para la Retroexcavadora CAT 416 por dos semanas."
-        -   Si la petición es ambigua (ej. "quiero una plataforma") o falta la duración (ej. "el minicargador"), la "accion" es "ACLARAR". La "respuesta_usuario" debe ser una pregunta para obtener los datos faltantes. Ej: "¡Ok, el minicargador! ¿Por cuánto tiempo te gustaría rentarlo?"
-        -   Si el usuario pide algo que no está en el catálogo, la "accion" es "CATALOGO_INCOMPLETO". La "respuesta_usuario" debe informarle amablemente y, si es posible, sugerir una alternativa. Ej: "Actualmente no manejamos tractores, pero contamos con retroexcavadoras y minicargadores que podrían servirte. ¿Te gustaría cotizar alguno de ellos?"
-        -   Si el usuario solo saluda o hace una pregunta general, la "accion" es "SALUDO_GENERAL". La "respuesta_usuario" debe ser un saludo cordial que presente lo que puedes hacer. Ej: "¡Hola! Soy Maquinaria Pro, tu asistente virtual. Puedo ayudarte a cotizar la renta de nuestra maquinaria. ¿Qué equipo necesitas hoy?"
+        **Reglas para Calcular Fechas y Decidir la Acción:**
+        -   La acción SÓLO puede ser "COTIZAR" si has identificado una **máquina** Y una **duración**.
+        -   Si el usuario dice "por dos semanas", y hoy es 2023-10-04, entonces 'fecha_inicio' es '2023-10-04' y 'fecha_fin' es '2023-10-18'.
+        -   Si el usuario dice "para el próximo martes", y hoy es Lunes 2023-10-09, 'fecha_inicio' es '2023-10-17'. Si no especifica duración, asume 1 día y 'fecha_fin' es la misma que 'fecha_inicio'.
+        -   Si el usuario dice "del 15 al 20 de noviembre", 'fecha_inicio' es '2023-11-15' y 'fecha_fin' es '2023-11-20'.
+        -   Si falta la máquina o la duración, la acción es "ACLARAR" y las fechas son null.
+        -   Si el usuario pide algo que no está en el catálogo, la acción es "CATALOGO_INCOMPLETO".
+        -   Si el usuario solo saluda, la acción es "SALUDO_GENERAL".
 
-        Petición del usuario (el último mensaje del historial): "${history[history.length - 1].parts[0].text}"
+        **Historial de Conversación:**
+        ${JSON.stringify(history)}
     `;
 
     // Pasamos el historial completo al modelo
