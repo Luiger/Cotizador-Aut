@@ -94,9 +94,28 @@ const getFileLink = async (fileId) => {
     }
 };
 
+/**
+ * Envía una acción de chat (ej. 'typing') para dar feedback al usuario.
+ * @param {number} chatId El ID del chat.
+ * @param {string} action La acción a enviar. Por defecto, 'typing'.
+ */
+const sendChatAction = async (chatId, action = 'escribiendo') => {
+    try {
+        await axios.post(`${TELEGRAM_API_URL}/sendChatAction`, {
+            chat_id: chatId,
+            action: action,
+        });
+    } catch (error) {
+        // No es crítico si esto falla, así que solo lo logueamos
+        console.warn(`Advertencia: No se pudo enviar la acción de chat al chat ${chatId}:`, error.message);
+    }
+};
+
+
 module.exports = {
     setWebhook,
     sendMessage,
     sendDocument,
-    getFileLink
+    getFileLink,
+    sendChatAction
 };

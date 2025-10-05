@@ -23,6 +23,8 @@ const processQuoteRequest = async (chatId, text) => {
 
         const userHistory = conversationHistory[chatId] || [];
         userHistory.push({ role: 'user', parts: [{ text }] });
+        // Le decimos al usuario que estamos "pensando"
+        await telegramApi.sendChatAction(chatId, 'escribiendo');
 
         const assistantResponse = await aiService.getAssistantResponse(userHistory, catalog);
         const { analisis_interno, respuesta_usuario } = assistantResponse;
@@ -44,21 +46,21 @@ const processQuoteRequest = async (chatId, text) => {
             const total = subtotal + iva;
 
             const quoteText = `
-✅ ¡Aquí tienes el desglose de tu cotización!
+                ✅ ¡Aquí tienes el desglose de tu cotización!
 
-**Máquina:** ${machine.nombre_modelo}
-**Descripción:** ${machine.descripcion}
-**Duración Solicitada:** ${analisis_interno.duracion_texto}
----
-**Subtotal:** $${subtotal.toFixed(2)} MXN
-**IVA (16%):** $${iva.toFixed(2)} MXN
-**Total:** **$${total.toFixed(2)} MXN**
+                **Máquina:** ${machine.nombre_modelo}
+                **Descripción:** ${machine.descripcion}
+                **Duración Solicitada:** ${analisis_interno.duracion_texto}
+                ---
+                **Subtotal:** $${subtotal.toFixed(2)} MXN
+                **IVA (16%):** $${iva.toFixed(2)} MXN
+                **Total:** **$${total.toFixed(2)} MXN**
 
-*Este es un costo preliminar. A continuación, generaré el PDF formal y agendaré el fin de la renta en nuestro calendario.*`;
+                *Este es un costo preliminar. A continuación, generaré el PDF formal y agendaré el fin de la renta en nuestro calendario.*`;
 
             await telegramApi.sendMessage(chatId, quoteText, 'Markdown');
             
-            const quoteData = {//listo
+            const quoteData = {
                 machine: machine,
                 duration: analisis_interno.duracion_texto,
                 subtotal: subtotal, 
