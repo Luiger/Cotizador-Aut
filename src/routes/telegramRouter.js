@@ -32,25 +32,14 @@ router.post('/webhook', async (req, res) => {
  */
 router.get('/setWebhook', async (req, res) => {
     try {
-        // req.protocol nos da 'http' o 'https'.
-        // req.get('host') nos da el dominio de nuestro servidor (ej. bot-cotizador-pro.onrender.com).
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
-        
-        // Construimos la URL completa de nuestro webhook.
-        // Usamos process.env.TELEGRAM_BOT_TOKEN como parte de la ruta para hacerla "secreta".
-        const webhookUrl = `${baseUrl}/telegram/webhook`;
-
-        // Llamamos a nuestra API para registrar la URL en Telegram.
-        const result = await telegramApi.setWebhook(webhookUrl);
-
-        if (result.success) {
-            res.status(200).send(`¡Webhook configurado exitosamente! URL: ${webhookUrl}`);
-        } else {
-            res.status(500).send(`Error al configurar el webhook: ${result.error}`);
-        }
+        const baseUrl = `https://${req.get('host')}`; 
+        const url = `${baseUrl}/telegram/webhook`;
+        const response = await require('axios').get(`https://api.telegram.org/bot${config.telegram.apiKey}/setWebhook?url=${url}`);
+        console.log('Webhook configurado en:', url);
+        res.send(response.data);
     } catch (error) {
-        console.error("Error crítico en /setWebhook:", error.message);
-        res.status(500).send("Error interno del servidor al intentar configurar el webhook.");
+        console.error("Error al configurar el webhook:", error.response?.data || error.message);
+        res.status(500).send(error.response?.data || { message: "Error interno" });
     }
 });
 
