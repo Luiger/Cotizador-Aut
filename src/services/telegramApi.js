@@ -99,7 +99,7 @@ const getFileLink = async (fileId) => {
  * @param {number} chatId El ID del chat.
  * @param {string} action La acción a enviar. Por defecto, 'typing'.
  */
-const sendChatAction = async (chatId, action = 'escribiendo') => {
+const sendChatAction = async (chatId, action = 'typing') => {
     try {
         await axios.post(`${TELEGRAM_API_URL}/sendChatAction`, {
             chat_id: chatId,

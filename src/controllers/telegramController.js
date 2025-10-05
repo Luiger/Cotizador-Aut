@@ -24,7 +24,7 @@ const processQuoteRequest = async (chatId, text) => {
         const userHistory = conversationHistory[chatId] || [];
         userHistory.push({ role: 'user', parts: [{ text }] });
         // Le decimos al usuario que estamos "pensando"
-        await telegramApi.sendChatAction(chatId, 'escribiendo');
+        await telegramApi.sendChatAction(chatId, 'typing');
 
         const assistantResponse = await aiService.getAssistantResponse(userHistory, catalog);
         const { analisis_interno, respuesta_usuario } = assistantResponse;
