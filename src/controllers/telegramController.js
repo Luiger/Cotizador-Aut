@@ -58,9 +58,11 @@ const processQuoteRequest = async (chatId, text) => {
 
             await telegramApi.sendMessage(chatId, quoteText, 'Markdown');
             
-            const quoteData = {
+            const quoteData = {//listo
                 machine: machine,
-                duration_texto: analisis_interno.duracion_texto,
+                duration: analisis_interno.duracion_texto,
+                subtotal: subtotal, 
+                iva: iva,           
                 total: total,
             };
 
