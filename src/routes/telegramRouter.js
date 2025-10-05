@@ -34,7 +34,7 @@ router.get('/setWebhook', async (req, res) => {
     try {
         const baseUrl = `https://${req.get('host')}`; 
         const url = `${baseUrl}/telegram/webhook`;
-        const response = await require('axios').get(`https://api.telegram.org/bot${config.telegram.apiKey}/setWebhook?url=${url}`);
+        const response = await require('axios').get(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/setWebhook?url=${url}`);
         console.log('Webhook configurado en:', url);
         res.send(response.data);
     } catch (error) {
